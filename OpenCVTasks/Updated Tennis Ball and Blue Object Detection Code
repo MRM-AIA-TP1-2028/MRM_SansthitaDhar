@@ -1,0 +1,347 @@
+import math
+import cv2
+import numpy as np
+
+BLUE_LOWER = np.array([90, 80, 50], dtype=np.uint8)
+BLUE_UPPER = np.array([135, 255, 255], dtype=np.uint8)
+BALL_LOWER = np.array([20, 80, 80], dtype=np.uint8)
+BALL_UPPER = np.array([45, 255, 255], dtype=np.uint8)
+
+MIN_BLUE_AREA = 300
+MIN_BALL_AREA = 150
+MAX_MATCH_DISTANCE = 100
+MAX_MISSED_FRAMES = 15
+TRAIL_LENGTH = 100
+
+CAMERA_WINDOW = "Blue Objects and Tennis Ball"
+INFO_WINDOW = "Blue Object Information"
+INFO_WIDTH = 760
+INFO_HEIGHT = 500
+
+tracks = {}
+next_track_id = 1
+frame_number = 0
+
+TRACK_COLORS = [
+    (255, 100, 0), (255, 0, 255), (0, 255, 255),
+    (0, 165, 255), (255, 255, 0), (100, 255, 100)
+]
+
+
+def clean_mask(mask):
+    kernel = np.ones((5, 5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+
+def find_contours(mask):
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    return contours
+
+
+def contour_center(contour):
+    moments = cv2.moments(contour)
+    if moments["m00"] == 0:
+        return None
+    return (
+        int(moments["m10"] / moments["m00"]),
+        int(moments["m01"] / moments["m00"])
+    )
+
+
+def find_tennis_ball(mask):
+    candidates = []
+
+    for contour in find_contours(mask):
+        area = cv2.contourArea(contour)
+        if area < MIN_BALL_AREA:
+            continue
+
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter <= 0:
+            continue
+
+        circularity = 4 * math.pi * area / (perimeter * perimeter)
+        if circularity < 0.55:
+            continue
+
+        (x, y), radius = cv2.minEnclosingCircle(contour)
+        if radius >= 5:
+            candidates.append(
+                (area, contour, (int(x), int(y)), int(radius))
+            )
+
+    return max(candidates, key=lambda item: item[0]) if candidates else None
+
+
+def update_tracks(detections):
+    global next_track_id
+
+    possible_matches = []
+
+    for track_id, track in tracks.items():
+        for detection_index, detection in enumerate(detections):
+            old_x, old_y = track["center"]
+            new_x, new_y = detection["center"]
+            distance = math.hypot(new_x - old_x, new_y - old_y)
+
+            if distance <= MAX_MATCH_DISTANCE:
+                possible_matches.append(
+                    (distance, track_id, detection_index)
+                )
+
+    possible_matches.sort(key=lambda item: item[0])
+    assigned_tracks = set()
+    assigned_detections = set()
+    assignments = {}
+
+    for distance, track_id, detection_index in possible_matches:
+        if track_id not in assigned_tracks and detection_index not in assigned_detections:
+            assignments[detection_index] = track_id
+            assigned_tracks.add(track_id)
+            assigned_detections.add(detection_index)
+
+    for detection_index, detection in enumerate(detections):
+        center = detection["center"]
+
+        if detection_index in assignments:
+            track_id = assignments[detection_index]
+            track = tracks[track_id]
+
+            old_center = track["center"]
+            step = math.hypot(
+                center[0] - old_center[0],
+                center[1] - old_center[1]
+            )
+
+            track["distance"] += step
+            track["center"] = center
+            track["area"] = detection["area"]
+            track["bbox"] = detection["bbox"]
+            track["contour"] = detection["contour"]
+            track["last_seen"] = frame_number
+            track["missed"] = 0
+            track["trail"].append(center)
+            track["trail"] = track["trail"][-TRAIL_LENGTH:]
+        else:
+            track_id = next_track_id
+            next_track_id += 1
+
+            tracks[track_id] = {
+                "center": center,
+                "distance": 0.0,
+                "area": detection["area"],
+                "bbox": detection["bbox"],
+                "contour": detection["contour"],
+                "last_seen": frame_number,
+                "missed": 0,
+                "trail": [center]
+            }
+
+    for track_id in list(tracks):
+        if (track_id not in assigned_tracks
+                and tracks[track_id]["last_seen"] != frame_number):
+            tracks[track_id]["missed"] += 1
+
+        if tracks[track_id]["missed"] > MAX_MISSED_FRAMES:
+            del tracks[track_id]
+
+
+def draw_information_panel(ball_center):
+    panel = np.zeros((INFO_HEIGHT, INFO_WIDTH, 3), dtype=np.uint8)
+
+    cv2.putText(panel, "BLUE OBJECT TRACKING", (20, 35),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
+    if ball_center is None:
+        ball_text = "Tennis ball: not detected"
+    else:
+        ball_text = (
+            f"Tennis ball center: x={ball_center[0]}, y={ball_center[1]}"
+        )
+
+    cv2.putText(panel, ball_text, (20, 70),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 220, 255), 2)
+
+    visible_tracks = sorted(
+        tracks.items(),
+        key=lambda item: item[1]["last_seen"],
+        reverse=True
+    )
+
+    if not visible_tracks:
+        cv2.putText(panel, "No blue objects detected", (20, 115),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1)
+        return panel
+
+    y = 110
+
+    for track_id, track in visible_tracks:
+        color = TRACK_COLORS[(track_id - 1) % len(TRACK_COLORS)]
+        cx, cy = track["center"]
+        status = "visible" if track["missed"] == 0 else "temporarily lost"
+
+        cv2.putText(panel, f"Blue object #{track_id} ({status})", (20, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.62, color, 2)
+        y += 28
+
+        cv2.putText(
+            panel,
+            f"Center: x={cx}, y={cy} px   Area: {track['area']:.0f} px^2",
+            (38, y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (235, 235, 235), 1
+        )
+        y += 24
+
+        x, box_y, width, height = track["bbox"]
+        cv2.putText(
+            panel,
+            f"Bounding box: x={x}, y={box_y}, w={width}, h={height}",
+            (38, y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1
+        )
+        y += 24
+
+        if ball_center is None:
+            relative_text = "Position relative to ball: ball not detected"
+        else:
+            dx = cx - ball_center[0]
+            dy = cy - ball_center[1]
+            relative_text = f"Relative to ball: dx={dx}px, dy={dy}px"
+
+        cv2.putText(panel, relative_text, (38, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 0), 1)
+        y += 24
+
+        cv2.putText(
+            panel,
+            f"Distance traversed: {track['distance']:.1f} px",
+            (38, y), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 1
+        )
+        y += 36
+
+        if y > INFO_HEIGHT - 10:
+            cv2.putText(panel, "More objects exist than fit in this panel",
+                        (20, INFO_HEIGHT - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.48, (180, 180, 180), 1)
+            break
+
+    return panel
+
+
+def main():
+    global frame_number, next_track_id
+
+    camera = cv2.VideoCapture(0)
+    if not camera.isOpened():
+        raise RuntimeError("Could not open webcam. Try changing camera index.")
+
+    try:
+        while True:
+            ok, frame = camera.read()
+            if not ok:
+                print("Could not read a frame from the webcam.")
+                break
+
+            frame_number += 1
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+            blue_mask = clean_mask(
+                cv2.inRange(hsv, BLUE_LOWER, BLUE_UPPER)
+            )
+            ball_mask = clean_mask(
+                cv2.inRange(hsv, BALL_LOWER, BALL_UPPER)
+            )
+
+            detections = []
+
+            for contour in find_contours(blue_mask):
+                area = cv2.contourArea(contour)
+                center = contour_center(contour)
+
+                if area >= MIN_BLUE_AREA and center is not None:
+                    bbox = cv2.boundingRect(contour)
+                    detections.append({
+                        "contour": contour,
+                        "area": area,
+                        "center": center,
+                        "bbox": bbox
+                    })
+
+            update_tracks(detections)
+
+            ball = find_tennis_ball(ball_mask)
+            ball_center = None
+
+            if ball is not None:
+                ball_area, ball_contour, ball_center, ball_radius = ball
+
+                cv2.drawContours(
+                    frame, [ball_contour], -1, (0, 220, 255), 2
+                )
+                cv2.circle(frame, ball_center, ball_radius, (0, 220, 255), 2)
+                cv2.circle(frame, ball_center, 4, (0, 0, 255), -1)
+
+                cv2.putText(
+                    frame, f"Tennis ball center: {ball_center}", (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 220, 255), 2
+                )
+                cv2.putText(
+                    frame,
+                    f"Radius: {ball_radius}px  Area: {ball_area:.0f} px^2",
+                    (10, 50), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.58, (0, 220, 255), 2
+                )
+            else:
+                cv2.putText(
+                    frame, "Tennis ball: not detected", (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 220, 255), 2
+                )
+
+            for track_id, track in tracks.items():
+                if track["missed"] != 0:
+                    continue
+
+                color = TRACK_COLORS[(track_id - 1) % len(TRACK_COLORS)]
+                contour = track["contour"]
+                center = track["center"]
+                x, y, width, height = track["bbox"]
+
+                cv2.drawContours(frame, [contour], -1, color, 2)
+                cv2.rectangle(
+                    frame, (x, y), (x + width, y + height), color, 1
+                )
+                cv2.circle(frame, center, 4, color, -1)
+                cv2.putText(
+                    frame, f"Blue #{track_id}: {track['area']:.0f}px^2",
+                    (x, max(18, y - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2
+                )
+
+                trail = track["trail"]
+                for i in range(1, len(trail)):
+                    cv2.line(frame, trail[i - 1], trail[i], color, 2)
+
+                if ball_center is not None:
+                    cv2.line(frame, center, ball_center, (0, 255, 0), 1)
+
+            panel = draw_information_panel(ball_center)
+
+            cv2.imshow(CAMERA_WINDOW, frame)
+            cv2.imshow(INFO_WINDOW, panel)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+
+            if key == ord("r"):
+                tracks.clear()
+                next_track_id = 1
+
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
