@@ -1,20 +1,294 @@
-. How many distortion coefficients are there, and what are they?
-When a camera captures an image, the lens can bend light in a way that makes straight lines appear curved or objects appear distorted. Camera distortion is the difference between the ideal image and the image captured by the camera.
+**1. How many distortion coefficients are there, and what are they?**
+Ans - When a camera captures an image, the lens can bend light in a way that makes straight lines appear curved or objects appear distorted. 
+Camera distortion is the difference between the ideal image and the image captured by the camera.
+The 2 main types of distortion are:
+Radial distortion: Straight lines may appear curved, especially near the edges of the image.
+Tangential distortion: The lens and image sensor may not be perfectly aligned, causing parts of the image to shift.
+k1,k2,k3 - Radial Distortion Coeeficients
+p1,p2 - Tangential Distortion Coefficients
+The coefficient array is commonly written as: [k1, k2, p1, p2, k3]
+OpenCV can then use them to correct the captured image using functions such as cv2.undistort().
 
-The two main types of lens distortion are:
-- Radial distortion: Straight lines may appear curved, especially near the edges of the image.
-- Tangential distortion: The lens and image sensor may not be perfectly aligned, causing parts of the image to shift.
-OpenCV commonly uses five distortion coefficients in its standard camera-calibration model.
-Coefficient	Meaning
-\(k_1\)	First radial distortion coefficient
-\(k_2\)	Second radial distortion coefficient
-\(p_1\)	First tangential distortion coefficient
-\(p_2\)	Second tangential distortion coefficient
-\(k_3\)	Third radial distortion coefficient
-The coefficient array is commonly written as:
+**2. Difference between .npz and .yaml files. **
+Ans - .npz — NumPy compressed archive
+Stores NumPy arrays in a binary archive. It is convenient for saving matrices and numerical data such as camera matrices and distortion coefficients.
+Example: camera_calibration.npz
+import numpy as np
 
-[k1, k2, p1, p2, k3]
+np.savez(
+    "camera.npz",
+    camera_matrix=camera_matrix,
+    dist_coeffs=dist_coeffs
+)
+To load it:
+data = np.load("camera.npz")
+camera_matrix = data["camera_matrix"]
+dist_coeffs = data["dist_coeffs"]
 
-Important: OpenCV can also use models with 4, 8, 12 or 14 coefficients. Five is the standard model commonly taught for basic camera calibration, not a universal limit.
+.yaml — Human-readable configuration file
 
-In your project, camera calibration estimates these coefficients. OpenCV can then use them to correct the captured image using functions such as cv2.undistort().
+Stores information as readable text using keys and values. It is convenient when you want to inspect or edit calibration parameters manually.
+camera_matrix: !!opencv-matrix
+   rows: 3
+   cols: 3
+   dt: d
+   data: [800, 0, 320,
+          0, 800, 240,
+          0, 0, 1]
+
+OpenCV can read and write this format using cv2.FileStorage.
+Feature	|.npz	|.yaml
+Storage|	Binary archive|	Readable text
+Human readability	|Not directly	|Yes
+Typical use	|NumPy-based projects|	OpenCV calibration configuration
+Loading	|np.load()	|cv2.FileStorage()
+
+Neither is universally better. For a Python project that primarily uses NumPy, .npz is convenient. 
+For calibration data that you want to inspect easily or share with OpenCV-based tools, .yaml is useful.
+
+3. What does cv2.moments() do? Explain all its attributes.
+Ans - Image moments are numerical measurements that describe the distribution of pixels in an image or contour.
+
+OpenCV's cv2.moments() calculates these measurements. They can help you find an object's area and centre.
+M = cv2.moments(contour)
+Raw Moments
+Attribute	| Meaning
+m00	Area of a contour when calculated from a contour; total intensity for an image
+m10	First-order moment along the x direction
+m01	First-order moment along the y direction
+m20	Second-order x moment
+m11	Mixed x-y moment
+m02	Second-order y moment
+m30	Third-order x moment
+m21	Mixed third-order moment: x²y
+m12	Mixed third-order moment: xy²
+m03	Third-order y moment
+The first-order moments m10 and m01 help calculate the centre of the object. 
+Higher-order moments describe how the pixels are distributed around the coordinate axes.
+
+Central Moments
+Central moments are represented by mu followed by the moment indices.
+Attributes	Meaning
+mu20, mu02	Spread of the object along the x and y directions
+mu11	Relationship between x and y distribution
+mu30, mu03	Third-order distribution along x and y
+mu21, mu12	Mixed third-order distribution measurements
+Unlike raw moments, central moments are calculated relative to the object's centre of mass. This makes them independent of the object's position in the image.
+These are represented by nu.
+- nu20, nu02, nu11
+- nu30, nu03, nu21, nu12
+They normalize central moments by the object's area or mass to reduce the effect of scaling. They are useful when comparing shapes of different sizes.
+The centroid is the geometrical centre of the contour, calculated from the raw moments:
+Centroid: Cx=m10/m00 , Cy=m01/m00
+
+** 4. Difference between Gaussian blur and morphologyEx() — in depth **
+Ans - A. Gaussian blur
+Gaussian blur smooths an image by replacing each pixel with a weighted average of nearby pixels. Nearby pixels contribute according to a Gaussian distribution, with greater weight generally given to pixels closer to the centre.
+
+In OpenCV:blurred = cv2.GaussianBlur(frame, (5, 5), 0)
+Here:
+- frame is the input image.
+- (5, 5) is the Gaussian kernel size.
+- 0 tells OpenCV to calculate the Gaussian standard deviation automatically from the kernel size.
+
+
+Camera images contain small variations caused by sensor noise, texture, and lighting. Blurring smooths these variations before colour thresholding or contour detection.
+
+For example, small variations in a yellow tennis ball's surface might otherwise create several tiny contours.
+
+Limitation: Gaussian blur can also soften the edges of an object. If the blur is too strong, a small ball or narrow object may become harder to detect.
+Morphological operations work on the shapes of foreground regions. They are commonly applied to a binary image or mask, where white pixels represent detected objects and black pixels represent the background.
+
+For example, after HSV thresholding, your mask might contain white regions for yellow and blue objects, along with small white noise spots.
+
+cv2.morphologyEx() applies a selected morphological operation using a structuring element called a kernel.
+kernel = np.ones((5, 5), np.uint8)
+
+clean_mask = cv2.morphologyEx(
+    mask, cv2.MORPH_OPEN, kernel
+)
+kernel = np.ones((5, 5), np.uint8)
+
+clean_mask = cv2.morphologyEx(
+    mask, cv2.MORPH_OPEN, kernel
+)
+Opening — cv2.MORPH_OPEN
+Closing — cv2.MORPH_CLOSE
+Erosion — cv2.MORPH_ERODE
+Dilation — cv2.MORPH_DILATE
+Morphological gradient — cv2.MORPH_GRADIENT
+Top-hat and black-hat
+
+Gaussian blur vs. morphology
+Feature	Gaussian blur	morphologyEx()
+Main purpose	Smooth image and reduce high-frequency noise	Modify foreground shapes and regions
+Typical input	Colour or grayscale image	Usually a binary mask
+Uses	Weighted averaging	Erosion, dilation, or combinations
+Main benefit	Reduces noise before thresholding	Removes small blobs or fills gaps after thresholding
+Main risk	Softens edges and fine details	Changes object size or merges objects
+
+** 6. 6. Difference between original ArUco and 5×5 ArUco, and why do we need the original? **
+The fundamental difference is the way the marker patterns are defined and encoded in their dictionaries.
+- Original ArUco: Uses the original ArUco dictionary family, with its own predefined marker patterns and IDs.
+- 5×5 ArUco: Uses markers with a 5 × 5 internal grid, meaning each marker contains 25 black-or-white cells that encode its pattern.
+The detector needs to know which dictionary to use because it matches the observed marker pattern against that dictionary's predefined patterns. Using the wrong dictionary may cause a marker not to be recognized or to be interpreted incorrectly.
+Feature	Original ArUco	5×5 ArUco
+Meaning	Original ArUco dictionary family	Dictionary using a 5×5 internal grid
+Marker pattern	Uses the original ArUco marker format	Has 25 internal binary cells
+Marker IDs	Depends on the original dictionary	Depends on the selected dictionary size
+Purpose	Uses the original marker family	Offers a different marker-grid size and error-correction trade-offs
+
+We need an original ArUco marker because it acts as a known reference that OpenCV can recognize and use to understand the position and orientation of a camera or object.
+
+**7. 7. What functions are there in cv2.aruco? **
+cv2.aruco is OpenCV's module for detecting, generating, and working with ArUco markers and related fiducial markers.
+
+The exact available functions depend on your OpenCV version and installation. These are some of the commonly used APIs.
+Function or class	Purpose
+cv2.aruco.getPredefinedDictionary()	Loads a predefined marker dictionary
+cv2.aruco.generateImageMarker()	Generates an image of a marker
+cv2.aruco.detectMarkers()	Detects markers, their corners, and IDs
+cv2.aruco.DetectorParameters()	Creates configurable detection parameters
+cv2.aruco.ArucoDetector()	Creates a detector object in modern OpenCV versions
+cv2.aruco.drawDetectedMarkers()	Draws detected marker borders and IDs
+cv2.aruco.estimatePoseSingleMarkers()	Estimates the pose of individual markers in versions that provide this API
+cv2.aruco.drawAxis()	Draws coordinate axes in older APIs; availability varies
+cv2.aruco.GridBoard()	Creates a board made of multiple markers
+cv2.aruco.CharucoBoard()	Creates a ChArUco board, combining chessboard corners and ArUco markers
+cv2.aruco.interpolateCornersCharuco()	Estimates ChArUco chessboard corners from detected markers
+cv2.aruco.calibrateCameraCharuco()	Calibrates a camera using ChArUco observations in versions that provide this API
+
+** 8. Fundamental difference between Hough circles and circularity. Which is better and why?**
+Hough circle detection
+
+Hough detection searches an image for circular patterns, usually using edge information. It estimates the circle's centre and radius.
+
+OpenCV function: cv2.HoughCircles()
+
+It can detect circles without first extracting a contour for each object.
+Circularity
+
+Circularity measures how close an already detected contour is to a perfect circle. It is calculated using the contour's area and perimeter.
+\[
+C=\frac{4\pi A}{P^2}
+\]
+
+Here, \(A\) is the contour area and \(P\) is its perimeter. A perfect circle has circularity 1; irregular shapes generally have lower values.
+
+9. Difference between methods and functions
+
+A function is a reusable block of code that performs a task. A method is a function associated with an object or class.
+print() is a function. You call it directly by its name.
+
+Another example is cv2.GaussianBlur(), which is called through the cv2 module.
+upper() is a string method. It is called on the string object text.
+get() is a dictionary method.
+
+Function	Method
+Called independently or through a module	Called on an object or class
+May receive an object as an argument	Often operates on the object it belongs to
+Example: len(text)	Example: text.upper()
+
+** 10. What is cv2.Rodrigues()? **
+Ans - cv2.Rodrigues() converts between two representations of a 3D rotation:
+- A rotation vector, containing three values.
+- A 3×3 rotation matrix.
+It is particularly useful in camera calibration, pose estimation, and robotics.
+Why do we need it?
+Suppose you detect an ArUco marker and estimate its orientation relative to the camera. OpenCV may provide a rotation vector called rvec.
+
+The rotation vector represents the axis and angle of rotation in a compact form. To apply the rotation to 3D coordinates using matrix operations, you can convert it to a rotation matrix.
+rotation_matrix, _ = cv2.Rodrigues(rvec)
+The result is a 3×3 matrix that represents the same rotation.
+What does the rotation matrix do?
+A 3D point can be rotated using:
+\[
+\mathbf{X}_{rotated}=R\mathbf{X}
+\]
+
+Here:
+- \(R\) is the 3×3 rotation matrix.
+- \(\mathbf{X}\) is the original 3D coordinate vector.
+- \(\mathbf{X}_{rotated}\) is the rotated coordinate vector.
+In camera pose estimation, the complete transformation typically also includes translation:
+\[
+\mathbf{X}_{camera}=R\mathbf{X}_{object}+t
+\]
+
+Here, \(t\) is the translation vector.
+Important distinction
+cv2.Rodrigues() does not detect an object, calculate its centre in the image, or independently estimate its pose. It converts the representation of a rotation that you already have.
+
+It can also convert a valid rotation matrix back into a rotation vector.
+
+**11. Why use HSV and not BGR? **
+BGR stands for Blue, Green, Red. It is the default channel order used by OpenCV for most standard colour images.
+
+Each pixel contains three values:
+- Blue intensity
+- Green intensity
+- Red intensity
+In a standard 8-bit image, each channel usually ranges from 0 to 255.
+
+For example, a yellow pixel has high red and green values and a relatively low blue value.
+HSV stands for:
+- H — Hue: The type of colour, such as yellow, blue, or red.
+- S — Saturation: How strong or vivid the colour is.
+- V — Value: How bright the colour is.
+Imagine your tennis ball is yellow and the background contains white walls, green grass, and other objects.
+
+In BGR, the brightness and colour information are mixed across three channels. You must choose suitable ranges for blue, green, and red simultaneously to isolate the yellow ball.
+
+In HSV, you can first select a range of hues corresponding to yellow, then restrict saturation and brightness to eliminate many unwanted pixels.
+
+OpenCV converts an image using:
+hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+You can then create a yellow mask:
+yellow_mask = cv2.inRange(
+    hsv, lower_yellow, upper_yellow
+)
+BGR vs HSV
+Feature	BGR	HSV
+Represents	Blue, green, red intensities	Hue, saturation, brightness
+Colour selection	Often requires ranges across three channels	Hue provides a more direct colour-selection dimension
+Lighting changes	Channel values can change significantly	Hue can be more stable under moderate brightness changes
+Best use in your project	Original camera frame and colour display	Selecting yellow and blue objects by colour
+
+Is HSV always better?
+No. HSV does not eliminate lighting problems. Strong reflections, shadows, low saturation, and extreme brightness can still change the detected hue or make colours difficult to distinguish.
+
+However, HSV is generally more convenient for colour-based segmentation, which is why it is a good starting point for your project.
+
+**12. what is solvepnp_ippe/ippe_square **
+In OpenCV, solvePnP() is a function that estimates the position and orientation of an object relative to the camera.
+
+For example, suppose your camera sees an ArUco marker. The camera knows where the marker's corners appear in the image, but it needs to calculate where the marker is in 3D space.
+
+solvePnP() helps calculate this using:
+- 3D object points: The actual corner positions of the marker, based on its physical size.
+- 2D image points: Where those same corners appear in the camera image.
+- Camera calibration: The camera's intrinsic parameters and distortion coefficients.
+It returns:
+- rvec — rotation vector, describing orientation.
+- tvec — translation vector, describing position.
+SOLVEPNP_IPPE
+
+IPPE stands for Infinitesimal Plane-Based Pose Estimation.
+
+It is designed for estimating the pose of planar objects — objects whose points lie on a flat plane. Examples include flat markers, posters and documents.
+SOLVEPNP_IPPE_SQUARE
+
+This is a specialized version of IPPE designed specifically for a square planar marker, such as an ArUco marker.
+
+It uses the four corners of the square and requires them to be supplied in a particular order, with 3D coordinates defined according to OpenCV's required convention.
+Feature	SOLVEPNP_IPPE	SOLVEPNP_IPPE_SQUARE
+Object shape	Any suitable planar shape	Specifically a square
+Points	Coplanar points	Exactly four square corners
+Use case	General flat objects	Square ArUco markers
+Input point arrangement	Planar points	Strictly defined corner order and coordinates
+
+
+
+
+
+
