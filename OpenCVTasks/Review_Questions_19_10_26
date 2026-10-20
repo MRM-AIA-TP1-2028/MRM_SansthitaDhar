@@ -1,0 +1,20 @@
+. How many distortion coefficients are there, and what are they?
+When a camera captures an image, the lens can bend light in a way that makes straight lines appear curved or objects appear distorted. Camera distortion is the difference between the ideal image and the image captured by the camera.
+
+The two main types of lens distortion are:
+- Radial distortion: Straight lines may appear curved, especially near the edges of the image.
+- Tangential distortion: The lens and image sensor may not be perfectly aligned, causing parts of the image to shift.
+OpenCV commonly uses five distortion coefficients in its standard camera-calibration model.
+Coefficient	Meaning
+\(k_1\)	First radial distortion coefficient
+\(k_2\)	Second radial distortion coefficient
+\(p_1\)	First tangential distortion coefficient
+\(p_2\)	Second tangential distortion coefficient
+\(k_3\)	Third radial distortion coefficient
+The coefficient array is commonly written as:
+
+[k1, k2, p1, p2, k3]
+
+Important: OpenCV can also use models with 4, 8, 12 or 14 coefficients. Five is the standard model commonly taught for basic camera calibration, not a universal limit.
+
+In your project, camera calibration estimates these coefficients. OpenCV can then use them to correct the captured image using functions such as cv2.undistort().
